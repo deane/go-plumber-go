@@ -7,6 +7,21 @@ import (
 	"io"
 	"strconv"
 	"strings"
+
+	"github.com/fatih/color"
+)
+
+var (
+	ColorFuncs = []func(string, ...interface{}) string{
+		colorwrapper(color.New(color.BgBlack, color.FgWhite)),
+		colorwrapper(color.New(color.BgRed, color.FgWhite)),
+		colorwrapper(color.New(color.BgGreen, color.FgBlack)),
+		colorwrapper(color.New(color.BgYellow, color.FgBlack)),
+		colorwrapper(color.New(color.BgBlue, color.FgWhite)),
+		colorwrapper(color.New(color.BgMagenta, color.FgWhite)),
+		colorwrapper(color.New(color.BgCyan, color.FgBlack)),
+		colorwrapper(color.New(color.BgWhite, color.FgBlack)),
+	}
 )
 
 type Point [2]int
@@ -15,6 +30,12 @@ type Color []Point
 type Board struct {
 	Grid   [][]int
 	colors []Color
+}
+
+func colorwrapper(c *color.Color) func(string, ...interface{}) string {
+	return func(s string, args ...interface{}) string {
+		return c.SprintFunc()(fmt.Sprintf(s, args...))
+	}
 }
 
 func New(txt io.ReadCloser) (*Board, error) {
@@ -113,8 +134,6 @@ func insertPoints(board *Board, line string, index int) error {
 func (b *Board) Clone() *Board {
 	newBoard := &Board{}
 
-	// colors list doesn't change so we can use the same pointer
-	newBoard.colors = b.colors
 	lines := len(b.Grid)
 	cols := len(b.Grid[0])
 
@@ -128,6 +147,9 @@ func (b *Board) Clone() *Board {
 		for k := range b.Grid[j] {
 			newBoard.Grid[j][k] = b.Grid[j][k]
 		}
+	}
+	for _, color := range b.colors {
+		newBoard.colors = append(newBoard.colors, color)
 	}
 
 	return newBoard
@@ -148,7 +170,11 @@ func (b *Board) ColorCell(colorIndex, line, col int) error {
 		return errors.New("Cell already occupied")
 	}
 
-	c := b.colors[colorIndex]
+	sliceLen := len(b.colors[colorIndex])
+	c := make([]Point, sliceLen, sliceLen+1)
+	for i, p := range b.colors[colorIndex] {
+		c[i] = p
+	}
 	updatedC := append(c[:len(c)-1], Point{line, col}, c[len(c)-1])
 	if !AreAllAjacent(updatedC[:len(c)]) {
 		return fmt.Errorf("Cells are not ajacent: %v", updatedC[:len(c)])
@@ -178,19 +204,36 @@ func (b *Board) Solved() bool {
 	return true
 }
 
+func AreAjacent(point, nextPoint Point) bool {
+
+	dx := point[0] - nextPoint[0]
+	dy := point[1] - nextPoint[1]
+	if dx*dx > 1 || dy*dy > 1 || dx*dx+dy*dy != 1 {
+		return false
+	}
+	return true
+}
+
 func AreAllAjacent(c Color) bool {
 	for i, point := range c {
 		if i == len(c)-1 {
 			break
 		}
 		nextPoint := c[i+1]
-		dx := point[0] - nextPoint[0]
-		dy := point[1] - nextPoint[1]
-		if dx*dx > 1 || dy*dy > 1 || dx*dx+dy*dy != 1 {
+		if !AreAjacent(point, nextPoint) {
 			return false
 		}
 	}
 	return true
+}
+
+func AjacentToAny(point Point, c Color) bool {
+	for _, p := range c {
+		if AreAjacent(p, point) {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *Board) String() string {
@@ -198,7 +241,7 @@ func (b *Board) String() string {
 }
 
 func (b *Board) GridString() string {
-	s := ""
+	s := "\n"
 	printdelimiter := func() {
 		for _ = range b.Grid[0] {
 			s += "+---"
@@ -209,7 +252,9 @@ func (b *Board) GridString() string {
 	printdelimiter()
 	for i := range b.Grid {
 		for j := range b.Grid[i] {
-			s += fmt.Sprintf("| %d ", b.Grid[i][j])
+			val := b.Grid[i][j]
+			s += "|"
+			s += ColorFuncs[val%8](" %d ", val)
 		}
 		s += "|\n"
 		printdelimiter()

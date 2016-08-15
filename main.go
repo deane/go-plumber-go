@@ -2,25 +2,35 @@ package main
 
 import (
 	"flag"
-	"fmt"
+	"log"
 	"os"
 
 	"github.com/deane/go-plumber-go/board"
 )
 
 var fileName = flag.String("file", "board.txt", "go-plumber-go board file to solve")
+var display = flag.Bool("show-results", false, "print the solution if the solving is successful")
+var canonical = flag.Bool("canonical", false, "only search for the canonical solution")
 
 func main() {
 	flag.Parse()
 	f, err := os.Open(*fileName)
 	if err != nil {
-		fmt.Printf("can't open the file %s, ERROR: %s\n", *fileName, err)
+		log.Printf("can't open the file %s, ERROR: %s\n", *fileName, err)
 		return
 	}
+	board.ShowResults = *display
+	board.Canonical = *canonical
 	defer f.Close()
-	board, err := board.New(f)
+	b, err := board.New(f)
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 	}
-	fmt.Println(board)
+	log.Println(b)
+	_, _, err = board.Backtrack(b)
+
+	if err != nil {
+		log.Fatalf("Couldn't resolve the puzzle: %s", err.Error())
+	}
+
 }
