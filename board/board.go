@@ -254,7 +254,11 @@ func (b *Board) GridString() string {
 		for j := range b.Grid[i] {
 			val := b.Grid[i][j]
 			s += "|"
-			s += ColorFuncs[val%8](" %d ", val)
+			if val == 0 {
+				s += "   "
+			} else {
+				s += ColorFuncs[val%len(ColorFuncs)](" %d ", val)
+			}
 		}
 		s += "|\n"
 		printdelimiter()
