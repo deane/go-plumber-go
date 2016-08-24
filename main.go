@@ -14,6 +14,7 @@ var canonical = flag.Bool("canonical", false, "only search for the canonical sol
 var detectDead = flag.Bool("detect-dead", false, "detect dead cells (surrounded by different colors on all sides)")
 var sort = flag.Bool("sort", false, "start with the longest flows")
 var sortReverse = flag.Bool("sort-reverse", false, "start with the shortest flows")
+var parallel = flag.Bool("parallel", false, "check tree branches in parallel")
 
 func main() {
 	flag.Parse()
@@ -25,6 +26,7 @@ func main() {
 	board.ShowResults = *display
 	board.Canonical = *canonical
 	board.DetectDead = *detectDead
+	board.Parallel = *parallel
 	defer f.Close()
 	b, err := board.New(f)
 	if err != nil {
@@ -34,7 +36,7 @@ func main() {
 		b = board.SortColors(b, false)
 	} else if *sortReverse {
 		b = board.SortColors(b, true)
-    }
+	}
 	log.Println(b)
 	_, err = board.Backtrack(b)
 

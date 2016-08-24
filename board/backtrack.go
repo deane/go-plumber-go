@@ -2,11 +2,13 @@ package board
 
 import (
 	"fmt"
+	"golang.org/x/net/context"
 	"log"
 	"math"
 	"os"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -15,9 +17,11 @@ var (
 	Canonical   = false
 	ShowResults = false
 	DetectDead  = false
+	Parallel    = false
 
 	//stats
-	leaves       = 0
+	leaves uint64
+	nodes  uint64
 )
 
 type Move struct {
@@ -60,27 +64,42 @@ func ApplyMove(b *Board, m Move) error {
 }
 
 func Backtrack(b *Board) (solution *BoardList, err error) {
-	history := 0
 	solution = &BoardList{list: make([]*Board, 0)}
 
 	s := time.Now()
-	err = backtrack(b, solution, &history)
+	if Parallel {
+		ctx, stopGoroutines := context.WithCancel(context.Background())
+		resChan := make(chan *BoardList)
+		go func() {
+			parallelBacktrack(ctx, b, resChan)
+			close(resChan)
+		}()
+		res, ok := <-resChan
+		stopGoroutines()
+		solution = res
+		if !ok {
+			err = fmt.Errorf("No solution Found. Explored %d states", nodes)
+		}
+	} else {
+		err = backtrack(b, solution)
+	}
+
 	tdelta := time.Since(s)
 	log.Printf(
 		"Backtrack Stats:\n%v\n%d states explored, %v per iteration, got to %d leaves",
-		tdelta, history, tdelta/time.Duration(history), leaves,
+		tdelta, nodes, tdelta/time.Duration(nodes), leaves,
 	)
 	if err != nil {
 		log.Printf(
 			"Not solved :(\n%s\nspent %v, exploring %d states\n",
-			err.Error(), tdelta, history,
+			err.Error(), tdelta, nodes,
 		)
 		return
 	}
 
 	log.Printf(
 		"SOLVED!!!!!! in %v, %d steps and %d states explored \n",
-		tdelta, solution.Len(), history,
+		tdelta, solution.Len(), nodes,
 	)
 	if ShowResults {
 		for _, board := range solution.list {
@@ -97,7 +116,7 @@ func Backtrack(b *Board) (solution *BoardList, err error) {
 	return
 }
 
-func backtrack(b *Board, s *BoardList, h *int) error {
+func backtrack(b *Board, s *BoardList) error {
 	solution := s
 
 	moves := NextMoves(b)
@@ -109,30 +128,82 @@ func backtrack(b *Board, s *BoardList, h *int) error {
 			log.Printf("Move:%v\nBoard:\n%s", newB.String())
 			os.Exit(1)
 		}
-		*h += 1
+		atomic.AddUint64(&nodes, 1)
 
 		if newB.Solved() {
 			solution.New(newB)
 			return nil
 		}
 
-		err = backtrack(newB, solution, h)
+		err = backtrack(newB, solution)
 		if err == nil {
 			solution.Prefix(newB)
 			return nil
 		}
 	}
 	if len(moves) == 0 {
-		leaves += 1
+		atomic.AddUint64(&leaves, 1)
 	}
-	return fmt.Errorf("No solution Found. Explored %d states", *h)
+	return fmt.Errorf("No solution Found. Explored %d states", nodes)
+}
+
+func parallelBacktrack(ctx context.Context, b *Board, res chan<- *BoardList) {
+	select {
+	case <-ctx.Done():
+		return
+	default:
+	}
+	moves := NextMoves(b)
+	wg := sync.WaitGroup{}
+	childRes := make(chan *BoardList)
+	for _, move := range moves {
+		wg.Add(1)
+		go func(m Move) {
+			defer wg.Done()
+			newB := b.Clone()
+			err := ApplyMove(newB, m)
+			if err != nil {
+				log.Printf("Backtrack ERROR applying move: %s", err.Error())
+				log.Printf("Move:%v\nBoard:\n%s", newB.String())
+				os.Exit(1)
+			}
+			atomic.AddUint64(&nodes, 1)
+
+			if newB.Solved() {
+				solution := &BoardList{}
+				solution.New(newB)
+				childRes <- solution
+			}
+
+			parallelBacktrack(ctx, newB, childRes)
+
+		}(move)
+	}
+	if len(moves) == 0 {
+		atomic.AddUint64(&leaves, 1)
+	}
+	go func() {
+		wg.Wait()
+		close(childRes)
+	}()
+	select {
+	case <-ctx.Done():
+		return
+	case solution, ok := <-childRes:
+		if ok {
+			solution.Prefix(b)
+			res <- solution
+		}
+	}
 }
 
 // NextMoves assumes the coordinates of the board's colors are valid
 func NextMoves(b *Board) []Move {
+	b.RLock()
+	defer b.RUnlock()
 	possibleMoves := []Move{}
 
-	for colorIndex, color := range b.colors {
+	for colorIndex, color := range b.flows {
 		if AreAllAjacent(color) {
 			continue
 		}
@@ -141,7 +212,7 @@ func NextMoves(b *Board) []Move {
 		around := surroundings(lastPoint)
 
 		for _, p := range around {
-			if !(inGrid(b, p) && b.Grid[p[0]][p[1]] == 0) {
+			if !(inGrid(b, p) && b.Get(p[0], p[1]) == 0) {
 				continue
 			}
 			legal := true
@@ -169,7 +240,7 @@ func NextMoves(b *Board) []Move {
 // can have a maximum of n-1 colors surrounding it
 func findDeadCell(b *Board, p Point, color int) bool {
 	for _, p2 := range surroundings(p) {
-		if !inGrid(b, p2) || b.Grid[p2[0]][p2[1]] != 0 {
+		if !inGrid(b, p2) || b.Get(p2[0], p2[1]) != 0 {
 			continue
 		}
 		colors := [4]int{color, -1, -1, -1}
@@ -179,7 +250,7 @@ func findDeadCell(b *Board, p Point, color int) bool {
 				continue
 			}
 			NumAdjacentCells += 1
-			c := b.Grid[p3[0]][p3[1]]
+			c := b.Get(p3[0], p3[1])
 			if c == 0 {
 				continue
 			}
@@ -206,7 +277,7 @@ func findDeadCell(b *Board, p Point, color int) bool {
 }
 
 func inGrid(b *Board, p Point) bool {
-	if p[0] < 0 || p[1] < 0 || p[0] >= len(b.Grid) || p[1] >= len(b.Grid[0]) {
+	if p[0] < 0 || p[1] < 0 || p[0] >= b.Lines() || p[1] >= b.Cols() {
 		return false
 	}
 	return true
@@ -219,8 +290,10 @@ func surroundings(p Point) []Point {
 func SortColors(b *Board, reverse bool) *Board {
 	res := b.Clone()
 
+	b.Lock()
+	defer b.Unlock()
 	l := []Color{} // new color list
-	for _, c := range b.colors {
+	for _, c := range b.flows {
 		set := false
 		for i, c2 := range l {
 			if Distance(c[0], c[len(c)-1]) > Distance(c2[0], c2[len(c2)-1]) {
@@ -233,17 +306,17 @@ func SortColors(b *Board, reverse bool) *Board {
 			l = append(l, c)
 		}
 	}
-    if reverse {
+	if reverse {
 		for i := 0; i < len(l)/2; i++ {
 			l[i], l[len(l)-i-1] = l[len(l)-i-1], l[i]
 		}
-    }
+	}
 
-	res.colors = l
+	res.flows = l
 
-	for j, c := range res.colors {
+	for j, c := range res.flows {
 		for _, p := range c {
-			res.Grid[p[0]][p[1]] = j + 1
+			res.grid[p[0]][p[1]] = j + 1
 		}
 	}
 	return res

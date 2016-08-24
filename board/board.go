@@ -7,6 +7,7 @@ import (
 	"io"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/fatih/color"
 )
@@ -28,8 +29,9 @@ type Point [2]int
 type Color []Point
 
 type Board struct {
-	Grid   [][]int
-	colors []Color
+	grid  [][]int
+	flows []Color
+	sync.RWMutex
 }
 
 func colorwrapper(c *color.Color) func(string, ...interface{}) string {
@@ -54,9 +56,9 @@ func New(txt io.ReadCloser) (*Board, error) {
 	}
 
 	fmt.Printf("board of %d lines and %d cols\n", lines, cols)
-	board.Grid = make([][]int, lines)
+	board.grid = make([][]int, lines)
 	for i := 0; i < cols; i++ {
-		board.Grid[i] = make([]int, cols)
+		board.grid[i] = make([]int, cols)
 	}
 
 	index := 0
@@ -94,6 +96,7 @@ func getSize(s string) (int, int, error) {
 
 }
 
+// not threadsafe
 func insertPoints(board *Board, line string, index int) error {
 	if line == "" {
 		return nil
@@ -118,83 +121,92 @@ func insertPoints(board *Board, line string, index int) error {
 		j, err2 := strconv.Atoi(coords[1])
 
 		// Check points are valid coordinates whithin specified board size
-		if err != nil || err2 != nil || i < 0 || i > len(board.Grid) || j < 0 || j > len(board.Grid[0]) {
+		if err != nil || err2 != nil || i < 0 || i > len(board.grid) || j < 0 || j > len(board.grid[0]) {
 			fmt.Println(err, err2, i, j)
 			return badFormatErr
 		}
-		board.Grid[i][j] = index
+		board.grid[i][j] = index
 		p := Point{i, j}
 		c = append(c, p)
 
 	}
-	board.colors = append(board.colors, c)
+	board.flows = append(board.flows, c)
 	return nil
 }
 
+// threadsafe
 func (b *Board) Clone() *Board {
+	//b.RLock()
+	//defer b.RUnlock()
+
 	newBoard := &Board{}
 
-	lines := len(b.Grid)
-	cols := len(b.Grid[0])
+	lines := b.Lines()
+	cols := b.Cols()
 
-	newBoard.Grid = make([][]int, lines)
+	newBoard.grid = make([][]int, lines)
 
-	for i := range newBoard.Grid {
-		newBoard.Grid[i] = make([]int, cols)
+	for i := range newBoard.grid {
+		newBoard.grid[i] = make([]int, cols)
 	}
 
-	for j := range b.Grid {
-		for k := range b.Grid[j] {
-			newBoard.Grid[j][k] = b.Grid[j][k]
+	for j := range b.grid {
+		for k := range b.grid[j] {
+			newBoard.grid[j][k] = b.grid[j][k]
 		}
 	}
-	for _, color := range b.colors {
-		newBoard.colors = append(newBoard.colors, color)
+	for _, flow := range b.flows {
+		newBoard.flows = append(newBoard.flows, flow)
 	}
 
 	return newBoard
 }
 
+// threadSafe
 func (b *Board) ColorCell(colorIndex, line, col int) error {
-	if colorIndex < 0 || colorIndex >= len(b.colors) {
+	b.Lock()
+	defer b.Unlock()
+	if colorIndex < 0 || colorIndex >= len(b.flows) {
 		return errors.New("color index out of range")
 	}
-	if line < 0 || line >= len(b.Grid) {
+	if line < 0 || line >= b.Lines() {
 		return errors.New("X out of range")
 	}
-	if col < 0 || col >= len(b.Grid[0]) {
+	if col < 0 || col >= b.Cols() {
 		return errors.New("Y out of range")
 	}
 
-	if b.Grid[line][col] != 0 {
+	if b.grid[line][col] != 0 {
 		return errors.New("Cell already occupied")
 	}
 
-	sliceLen := len(b.colors[colorIndex])
+	sliceLen := len(b.flows[colorIndex])
 	c := make([]Point, sliceLen, sliceLen+1)
-	for i, p := range b.colors[colorIndex] {
+	for i, p := range b.flows[colorIndex] {
 		c[i] = p
 	}
 	updatedC := append(c[:len(c)-1], Point{line, col}, c[len(c)-1])
 	if !AreAllAjacent(updatedC[:len(c)]) {
 		return fmt.Errorf("Cells are not ajacent: %v", updatedC[:len(c)])
 	}
-	b.Grid[line][col] = colorIndex + 1
-	b.colors[colorIndex] = updatedC
+	b.grid[line][col] = colorIndex + 1
+	b.flows[colorIndex] = updatedC
 
 	return nil
 }
 
 func (b *Board) Solved() bool {
+	//b.RLock()
+	//defer b.RUnlock()
 	//check the grid is full
-	for i := 0; i < len(b.Grid); i++ {
-		for j := 0; j < len(b.Grid[0]); j++ {
-			if b.Grid[i][j] == 0 {
+	for i := 0; i < b.Lines(); i++ {
+		for j := 0; j < b.Cols(); j++ {
+			if b.grid[i][j] == 0 {
 				return false
 			}
 		}
 	}
-	for _, c := range b.colors {
+	for _, c := range b.flows {
 		if !AreAllAjacent(c) {
 			fmt.Println(c)
 			return false
@@ -241,18 +253,20 @@ func (b *Board) String() string {
 }
 
 func (b *Board) GridString() string {
+	b.RLock()
+	defer b.RUnlock()
 	s := "\n"
 	printdelimiter := func() {
-		for _ = range b.Grid[0] {
+		for _ = range b.grid[0] {
 			s += "+---"
 		}
 		s += "+\n"
 	}
 
 	printdelimiter()
-	for i := range b.Grid {
-		for j := range b.Grid[i] {
-			val := b.Grid[i][j]
+	for i := range b.grid {
+		for j := range b.grid[i] {
+			val := b.grid[i][j]
 			s += "|"
 			if val == 0 {
 				s += "   "
@@ -266,9 +280,12 @@ func (b *Board) GridString() string {
 	return s
 }
 
+// Thread safe
 func (b *Board) ColorsString() string {
+	b.RLock()
+	defer b.RUnlock()
 	s := ""
-	for _, c := range b.colors {
+	for _, c := range b.flows {
 		for i, point := range c {
 			if i == len(c)-1 && !AreAllAjacent(c) {
 				s += "[???]->"
@@ -281,4 +298,23 @@ func (b *Board) ColorsString() string {
 		s += "\n"
 	}
 	return s
+}
+
+// Thread safe
+func (b *Board) Get(line, col int) int {
+	b.RLock()
+	defer b.RUnlock()
+	return b.grid[line][col]
+}
+
+// assuming the layout of the grid never changes
+// (instead of implementing thread safety)
+func (b *Board) Lines() int {
+	return len(b.grid)
+}
+
+// assuming the layout of the grid never changes
+// (instead of implementing thread safety)
+func (b *Board) Cols() int {
+	return len(b.grid[0])
 }
