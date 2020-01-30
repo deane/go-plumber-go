@@ -249,7 +249,7 @@ func AjacentToAny(point Point, c Color) bool {
 }
 
 func (b *Board) String() string {
-	return b.GridString() + b.ColorsString()
+	return b.GridString() //+ b.ColorsString()
 }
 
 func (b *Board) GridString() string {

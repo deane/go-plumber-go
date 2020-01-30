@@ -2,7 +2,6 @@ package board
 
 import (
 	"fmt"
-	"golang.org/x/net/context"
 	"log"
 	"math"
 	"os"
@@ -10,6 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"golang.org/x/net/context"
 )
 
 var (
@@ -85,25 +86,21 @@ func Backtrack(b *Board) (solution *BoardList, err error) {
 	}
 
 	tdelta := time.Since(s)
-	log.Printf(
-		"Backtrack Stats:\n%v\n%d states explored, %v per iteration, got to %d leaves",
-		tdelta, nodes, tdelta/time.Duration(nodes), leaves,
-	)
 	if err != nil {
 		log.Printf(
 			"Not solved :(\n%s\nspent %v, exploring %d states\n",
 			err.Error(), tdelta, nodes,
 		)
+		log.Printf(
+			"Backtrack Stats:\n%v\n%d states explored, %v per iteration, got to %d leaves",
+			tdelta, nodes, tdelta/time.Duration(nodes), leaves,
+		)
 		return
 	}
 
-	log.Printf(
-		"SOLVED!!!!!! in %v, %d steps and %d states explored \n",
-		tdelta, solution.Len(), nodes,
-	)
 	if ShowResults {
 		for _, board := range solution.list {
-			interval := 300 * time.Millisecond
+			interval := 100 * time.Millisecond
 			time.Sleep(interval)
 			cmd := exec.Command("clear")
 			cmd.Stdout = os.Stdout
@@ -111,8 +108,20 @@ func Backtrack(b *Board) (solution *BoardList, err error) {
 			log.Printf("\n%s", board.GridString())
 		}
 		time.Sleep(1 * time.Second)
+	} else {
+		board := solution.list[len(solution.list)-1]
+		log.Printf("\n%s", board.GridString())
 	}
 
+	log.Printf(
+		"PUZZLE SOLVED!!!!!!\n"+
+			"\tTime: %v\n"+
+			"\tAverage time per step: %v\n"+
+			"\tSteps: %d\n"+
+			"\tStates explored:%d\n"+
+			"\tLeaves (dead ends): %d\n",
+		tdelta, tdelta/time.Duration(nodes), solution.Len(), nodes, leaves,
+	)
 	return
 }
 
